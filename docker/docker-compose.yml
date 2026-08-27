@@ -1,0 +1,133 @@
+# Topology (layer 2 only, no shared bridge):
+#
+#   alice --net-alice-switch--\
+#                               switch --net-switch-carol-- carol
+#     bob --net-switch-bob----/
+#
+# alice, bob, and carol are never on the same docker network - the
+# only path between any two of them is through the switch container.
+# Each docker network below has exactly two members, so it behaves as
+# a point-to-point link rather than a shared segment. The switch now
+# has three such links (three ports), so it can no longer just relay
+# "whatever comes in one port goes out the other" - it has to pick a
+# port per frame, which is why a CAM (MAC address table) becomes
+# necessary once you're past two ports.
+#
+# Two independent addressing layers, on purpose:
+#   - The docker-assigned "plumbing" IPs (10.0.1.0/24, 10.0.2.0/24,
+#     10.0.3.0/24) just satisfy docker's requirement that a network
+#     have a subnet. Kernel ARP for these is disabled (see
+#     entrypoint.sh), so they're otherwise unused.
+#   - ARP_MY_IP / ARP_PEER_IPS is the logical addressing your ARP
+#     implementation actually operates on (192.169.69.10 / 192.169.69.20 /
+#     192.169.69.30) - whatever you send/parse over the raw socket.
+#     ARP_PEER_IPS is a comma-separated list since each node now has
+#     two peers instead of one.
+#
+# Each container just has a toolchain + capabilities + kernel ARP
+# disabled, and sleeps. Build and run your own code via:
+#   docker exec -it alice sh
+#   docker exec -it bob sh
+#   docker exec -it carol sh
+#   docker exec -it switch sh
+
+name: arp-from-scratch
+
+services:
+  switch:
+    build: ./switch
+    container_name: switch
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - SWITCH_PORT_A=eth0
+      - SWITCH_PORT_B=eth1
+      - SWITCH_PORT_C=eth2
+      - SWITCH_MAC_A=02:00:00:00:00:e0
+      - SWITCH_MAC_B=02:00:00:00:00:e1
+      - SWITCH_MAC_C=02:00:00:00:00:e2
+      - ARP_OFF=${ARP_OFF:-1}
+    volumes:
+      - ./switch/src:/app/src
+    networks:
+      net-alice-switch:
+        ipv4_address: 10.0.1.2
+      net-switch-bob:
+        ipv4_address: 10.0.2.2
+      net-switch-carol:
+        ipv4_address: 10.0.3.2
+
+  alice:
+    build: ./node
+    container_name: alice
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - ARP_IFACE=eth0
+      - ARP_MAC=02:a1:1c:e0:00:0a
+      - ARP_MY_IP=192.169.69.10
+      - ARP_PEER_IPS=192.169.69.20,192.169.69.30
+      - ARP_SILENT=${ARP_SILENT:-0}
+      - ARP_OFF=${ARP_OFF:-1}
+    volumes:
+      - ./node/src:/app/src
+    networks:
+      net-alice-switch:
+        ipv4_address: 10.0.1.10
+
+  bob:
+    build: ./node
+    container_name: bob
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - ARP_IFACE=eth0
+      - ARP_MAC=02:b0:b0:00:00:0b
+      - ARP_MY_IP=192.169.69.20
+      - ARP_PEER_IPS=192.169.69.10,192.169.69.30
+      - ARP_SILENT=${ARP_SILENT:-0}
+      - ARP_OFF=${ARP_OFF:-1}
+    volumes:
+      - ./node/src:/app/src
+    networks:
+      net-switch-bob:
+        ipv4_address: 10.0.2.10
+
+  carol:
+    build: ./node
+    container_name: carol
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - ARP_IFACE=eth0
+      - ARP_MAC=02:ca:20:10:00:0c
+      - ARP_MY_IP=192.169.69.30
+      - ARP_PEER_IPS=192.169.69.10,192.169.69.20
+      - ARP_SILENT=${ARP_SILENT:-0}
+      - ARP_OFF=${ARP_OFF:-1}
+    volumes:
+      - ./node/src:/app/src
+    networks:
+      net-switch-carol:
+        ipv4_address: 10.0.3.10
+
+networks:
+  net-alice-switch:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.0.1.0/24
+  net-switch-bob:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.0.2.0/24
+  net-switch-carol:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.0.3.0/24
