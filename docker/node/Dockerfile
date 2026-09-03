@@ -1,12 +1,13 @@
-FROM alpine:3.20
+FROM debian:bookworm-slim
 
-RUN apk add --no-cache gcc musl-dev make iproute2 tcpdump
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    iproute2 iputils-ping iputils-arping tcpdump libc6 libgcc-s1 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
-# Your source is bind-mounted at /app/src (see docker-compose.yml).
-# Build/run it yourself, e.g.: docker exec -it alice sh
+# Binary is bind-mounted at /app/host (see docker-compose.yml)
 CMD ["sleep", "infinity"]
 ENTRYPOINT ["./entrypoint.sh"]

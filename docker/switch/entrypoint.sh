@@ -26,4 +26,8 @@ if [ "$ARP_OFF" != "0" ]; then
     ip link set "$PORT_C" arp off || true
 fi
 
-exec "$@"
+# Run switch in background so it can be killed (e.g. in kernel mode
+# where the bridge replaces it) without stopping the container.
+/app/switch &
+echo $! > /tmp/switch.pid
+exec tail -f /dev/null

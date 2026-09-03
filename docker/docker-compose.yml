@@ -13,16 +13,10 @@
 # port per frame, which is why a CAM (MAC address table) becomes
 # necessary once you're past two ports.
 #
-# Two independent addressing layers, on purpose:
-#   - The docker-assigned "plumbing" IPs (10.0.1.0/24, 10.0.2.0/24,
-#     10.0.3.0/24) just satisfy docker's requirement that a network
-#     have a subnet. Kernel ARP for these is disabled (see
-#     entrypoint.sh), so they're otherwise unused.
-#   - ARP_MY_IP / ARP_PEER_IPS is the logical addressing your ARP
-#     implementation actually operates on (192.169.69.10 / 192.169.69.20 /
-#     192.169.69.30) - whatever you send/parse over the raw socket.
-#     ARP_PEER_IPS is a comma-separated list since each node now has
-#     two peers instead of one.
+# The docker-assigned IPs (10.0.1.10 / 10.0.2.10 / 10.0.3.10) are the
+# addresses your ARP implementation actually operates on - whatever you
+# send/parse over the raw socket. Kernel ARP stays disabled (see
+# entrypoint.sh); the L2 switch relays frames between the nodes.
 #
 # Each container just has a toolchain + capabilities + kernel ARP
 # disabled, and sleeps. Build and run your own code via:
@@ -49,7 +43,8 @@ services:
       - SWITCH_MAC_C=02:00:00:00:00:e2
       - ARP_OFF=${ARP_OFF:-1}
     volumes:
-      - ./switch/src:/app/src
+      - ../arp/target/debug/switch:/app/switch
+    command: ["/app/switch"]
     networks:
       net-alice-switch:
         ipv4_address: 10.0.1.2
@@ -67,12 +62,12 @@ services:
     environment:
       - ARP_IFACE=eth0
       - ARP_MAC=02:a1:1c:e0:00:0a
-      - ARP_MY_IP=192.169.69.10
-      - ARP_PEER_IPS=192.169.69.20,192.169.69.30
       - ARP_SILENT=${ARP_SILENT:-0}
       - ARP_OFF=${ARP_OFF:-1}
     volumes:
-      - ./node/src:/app/src
+      - ../arp/target/debug/host:/app/host
+      - ../arp/target/debug/boot:/app/boot
+    command: ["/app/host"]
     networks:
       net-alice-switch:
         ipv4_address: 10.0.1.10
@@ -86,12 +81,12 @@ services:
     environment:
       - ARP_IFACE=eth0
       - ARP_MAC=02:b0:b0:00:00:0b
-      - ARP_MY_IP=192.169.69.20
-      - ARP_PEER_IPS=192.169.69.10,192.169.69.30
       - ARP_SILENT=${ARP_SILENT:-0}
       - ARP_OFF=${ARP_OFF:-1}
     volumes:
-      - ./node/src:/app/src
+      - ../arp/target/debug/host:/app/host
+      - ../arp/target/debug/boot:/app/boot
+    command: ["/app/host"]
     networks:
       net-switch-bob:
         ipv4_address: 10.0.2.10
@@ -105,12 +100,12 @@ services:
     environment:
       - ARP_IFACE=eth0
       - ARP_MAC=02:ca:20:10:00:0c
-      - ARP_MY_IP=192.169.69.30
-      - ARP_PEER_IPS=192.169.69.10,192.169.69.20
       - ARP_SILENT=${ARP_SILENT:-0}
       - ARP_OFF=${ARP_OFF:-1}
     volumes:
-      - ./node/src:/app/src
+      - ../arp/target/debug/host:/app/host
+      - ../arp/target/debug/boot:/app/boot
+    command: ["/app/host"]
     networks:
       net-switch-carol:
         ipv4_address: 10.0.3.10

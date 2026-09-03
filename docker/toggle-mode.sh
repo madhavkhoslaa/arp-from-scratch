@@ -2,31 +2,31 @@
 # Flip the whole running topology between two modes:
 #
 #   kernel  - the switch container bridges its three ports (eth0/eth1/eth2)
-#             into one real L2 segment, alice/bob/carol get their logical
-#             192.169.69.x/24 address actually assigned to eth0, and kernel
-#             ARP is turned on everywhere. Result: real `ping`/ARP between
-#             alice, bob and carol works, mediated entirely by the kernel.
-#             Good for sanity-checking the topology/addressing itself.
+#             into one real L2 segment. The switch binary is killed (the
+#             bridge does forwarding). Kernel ARP stays OFF everywhere -
+#             only the user's boot/host code handles ARP.
 #
 #   custom  - the bridge is torn down (back to three isolated
-#             point-to-point links, matching the original topology),
-#             the 192.169.69.x address is removed from each node's
-#             interface (ARP_MY_IP/ARP_PEER_IPS remain as env vars only),
-#             and kernel ARP is turned off everywhere. Nothing works
-#             except whatever your own raw-socket ARP/relay code does.
+#             point-to-point links). Kernel ARP is turned off everywhere;
+#             nothing works except whatever your own raw-socket ARP/relay
+#             code does.
 #
-# Usage: ./toggle-mode.sh kernel|custom
+# The nodes keep their docker-assigned IPs (10.0.1.10 / 10.0.2.10 /
+# 10.0.3.10) in both modes - those are the addresses your ARP code
+# operates on.
+#
+# Usage: ./toggle-mode.sh [kernel|custom]   (default: custom)
 #
 # Safe to run repeatedly / in either starting state - every step is
 # best-effort (|| true) so it doesn't matter what state you're coming from.
 
 set -e
 
-MODE="$1"
+MODE="${1:-custom}"
 case "$MODE" in
     kernel|custom) ;;
     *)
-        echo "Usage: $0 kernel|custom" >&2
+        echo "Usage: $0 [kernel|custom]" >&2
         exit 1
         ;;
 esac
@@ -37,14 +37,6 @@ BRIDGE="br0"
 
 NODES="alice bob carol"
 NODE_IFACE="eth0"
-# must match ARP_MY_IP in docker-compose.yml
-node_ip() {
-    case "$1" in
-        alice) echo "192.169.69.10/24" ;;
-        bob)   echo "192.169.69.20/24" ;;
-        carol) echo "192.169.69.30/24" ;;
-    esac
-}
 
 if [ "$MODE" = "kernel" ]; then
     echo "$SWITCH: bridging $SWITCH_IFACES into $BRIDGE"
@@ -55,14 +47,22 @@ if [ "$MODE" = "kernel" ]; then
         docker exec "$SWITCH" ip link set "$i" up
     done
 
+    # Kill the switch binary - the kernel bridge does forwarding now.
+    docker exec "$SWITCH" bash -c 'kill $(cat /tmp/switch.pid)' 2>/dev/null || true
+
+    # ARP stays OFF on all nodes - only the user's code handles ARP.
     for c in $NODES; do
-        ip="$(node_ip "$c")"
-        echo "$c: assigning $ip to $NODE_IFACE, arp on"
-        docker exec "$c" ip addr add "$ip" dev "$NODE_IFACE" 2>/dev/null || true
-        docker exec "$c" ip link set "$NODE_IFACE" arp on
+        echo "$c: arp off (user ARP only)"
+        docker exec "$c" ip link set "$NODE_IFACE" arp off
     done
 
-    echo "Done. Try: docker exec alice ping -c 3 192.169.69.20"
+    # Re-send gratuitous ARP now that the bridge is up so all nodes learn each other.
+    for c in $NODES; do
+        echo "$c: sending gratuitous ARP"
+        docker exec "$c" /app/boot 2>&1 || true
+    done
+
+    echo "Done. Bridged; kernel ARP off - user ARP code only."
 else
     echo "$SWITCH: unbridging $SWITCH_IFACES, removing $BRIDGE"
     for i in $SWITCH_IFACES; do
@@ -72,11 +72,17 @@ else
     docker exec "$SWITCH" ip link delete "$BRIDGE" 2>/dev/null || true
 
     for c in $NODES; do
-        ip="$(node_ip "$c")"
-        echo "$c: removing $ip from $NODE_IFACE, arp off"
-        docker exec "$c" ip addr del "$ip" dev "$NODE_IFACE" 2>/dev/null || true
+        echo "$c: arp off"
         docker exec "$c" ip link set "$NODE_IFACE" arp off
+        # Ensure /16 on-link so all nodes see each other as directly attached
+        cur="$(docker exec "$c" ip -4 -o addr show dev "$NODE_IFACE" | awk '{print $4}' | head -1)"
+        if [ -n "$cur" ]; then
+            base="${cur%/*}"
+            docker exec "$c" ip addr del "$cur" dev "$NODE_IFACE" 2>/dev/null || true
+            docker exec "$c" ip addr add "${base}/16" dev "$NODE_IFACE"
+            echo "  $c: set ${base}/16 on $NODE_IFACE"
+        fi
     done
 
-    echo "Done. Kernel is out of the way - your raw-socket implementation owns ARP now."
+    echo "Done. Kernel ARP is off - your raw-socket implementation owns ARP now."
 fi
