@@ -4,6 +4,13 @@ Implementing ARP by hand: raw sockets, Ethernet frames, and a userspace
 switch, with the kernel's own ARP handling turned off so my code is the
 only thing resolving IPs to MAC addresses.
 
+## Video
+
+Tried to live code it but it's so hard — here's the video of me trying
+it :D
+
+[Watch on YouTube](https://www.youtube.com/watch?v=2nyH_0mch0w&t=752s)
+
 ## Topology
 
 ```
